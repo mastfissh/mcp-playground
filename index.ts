@@ -126,6 +126,11 @@ const WriteFileArgsSchema = z.object({
   content: z.string(),
 });
 
+const WriteAudioMetadataArgsSchema = z.object({
+  path: z.string(),
+  tags: z.record(z.string(), z.any()),
+});
+
 const EditOperation = z.object({
   oldText: z.string().describe("Text to search for - must match exactly"),
   newText: z.string().describe("Text to replace with"),
@@ -403,6 +408,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           "Handles text content with proper encoding. Only works within allowed directories.",
         inputSchema: zodToJsonSchema(WriteFileArgsSchema) as ToolInput,
       },
+      
+      {
+        name: "write_audio_metadata",
+        description:
+          `Write audio tags to an audio file. Important tags are "artist", "remix", "title", and "album". This tool allows you to modify the metadata of the file`,
+        inputSchema: zodToJsonSchema(WriteAudioMetadataArgsSchema) as ToolInput,
+      },
       {
         name: "edit_file",
         description:
@@ -563,18 +575,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (musicExtensions.includes(ext)) {
             try {
               const mm = await import("music-metadata");
-              const metadata = await mm.parseFile(validPath, { duration: true, skipCovers: true, });
+              const metadata = await mm.parseFile(validPath, {
+                duration: true,
+                skipCovers: true,
+              });
               // Only include relevant metadata fields for brevity
               content = JSON.stringify(
-          {
-            common: metadata.common,
-          },
-          null,
-          2
+                {
+                  common: metadata.common,
+                },
+                null,
+                2
               );
             } catch (err) {
               content = `Could not read music metadata: ${
-          err instanceof Error ? err.message : String(err)
+                err instanceof Error ? err.message : String(err)
               }`;
             }
           } else {
@@ -621,6 +636,55 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [
             { type: "text", text: `Successfully wrote to ${parsed.data.path}` },
+          ],
+        };
+      }
+
+      case "write_audio_metadata": {
+        const parsed = WriteAudioMetadataArgsSchema.safeParse(args);
+        if (!parsed.success) {
+          throw new Error(
+            `Invalid arguments for write_audio_metadata: ${parsed.error}`
+          );
+        }
+        const validPath = await validatePath(parsed.data.path);
+        // Write tags using ffmpeg
+        const { execFile } = await import("node:child_process");
+        const tags = parsed.data.tags;
+        const ffmpegArgs = ["-y", "-i", validPath];
+
+        // Add metadata arguments
+        for (const [key, value] of Object.entries(tags)) {
+          ffmpegArgs.push("-metadata", `${key}=${value}`);
+        }
+
+        // Output to a temporary file in a tmp subdirectory (ffmpeg does not support in-place editing)
+        const tmpDir = path.join(path.dirname(validPath), "tmp");
+        await fs.mkdir(tmpDir, { recursive: true });
+        const tmpPath = path.join(tmpDir, path.basename(validPath));
+        ffmpegArgs.push("-codec", "copy", tmpPath);
+
+        // Run ffmpeg
+        await new Promise<void>((resolve, reject) => {
+          execFile("ffmpeg", ffmpegArgs, (error, stdout, stderr) => {
+            if (error) reject(new Error(stderr || error.message));
+            else resolve();
+          });
+        });
+
+        // Replace original file with the new file
+        await fs.rename(tmpPath, validPath);
+
+        const success = true;
+        if (!success) {
+          throw new Error("Failed to write tags to the audio file.");
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Successfully wrote audio tags to ${parsed.data.path}`,
+            },
           ],
         };
       }
