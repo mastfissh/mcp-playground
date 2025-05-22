@@ -128,7 +128,12 @@ const WriteFileArgsSchema = z.object({
 
 const WriteAudioMetadataArgsSchema = z.object({
   path: z.string(),
-  tags: z.record(z.string(), z.any()),
+  tags: z.object({
+    album: z.string().optional(),
+    artist: z.string().optional(),
+    title: z.string().optional(),
+    remix: z.string().optional(),
+  }),
 });
 
 const EditOperation = z.object({
@@ -654,8 +659,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const ffmpegArgs = ["-y", "-i", validPath];
 
         // Add metadata arguments
+        // Determine file extension for special tag mapping
+        const ext = path.extname(validPath).toLowerCase();
         for (const [key, value] of Object.entries(tags)) {
-          ffmpegArgs.push("-metadata", `${key}=${value}`);
+          if (key === "remix") {
+            if (ext === ".mp3") {
+              ffmpegArgs.push("-metadata", `TIT3=${value}`);
+            } else if (ext === ".flac") {
+              ffmpegArgs.push("-metadata", `VERSION=${value}`);
+            }
+            // For other formats, skip mapping "remix"
+          } else {
+            ffmpegArgs.push("-metadata", `${key}=${value}`);
+          }
         }
 
         // Output to a temporary file in a tmp subdirectory (ffmpeg does not support in-place editing)
