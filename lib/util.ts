@@ -1,7 +1,7 @@
 import fs from "fs/promises";
+import { minimatch } from "minimatch";
 import os from "os";
 import path from "path";
-import { minimatch } from "minimatch";
 
 // Security utilities
 export async function validatePath(
